@@ -49,11 +49,13 @@ MAX_CSV_BYTES  = 50 * 1024 * 1024
 # Maximum rows to display in analysis table - prevents UI lag
 MAX_TABLE_ROWS = 10_000
 
-# Expected CSV column names (used for validation)
+# Expected CSV column names (used for validation) — professor's schema
 EXPECTED_COLUMNS = {
-    "video", "frame_id", "timestamp", "track_id", "class",
-    "x1", "y1", "x2", "y2", "width", "height", "cx", "cy",
-    "confidence", "direction", "event",
+    "frame", "timestamp_sec", "scene_name", "group_id", "video_name",
+    "track_id", "class_name", "confidence",
+    "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2", "cx", "cy",
+    "frame_width", "frame_height",
+    "crossed_line", "direction", "speed_px_s",
 }
 
 # Valid object classes for analysis validation
@@ -62,8 +64,8 @@ KNOWN_CLASSES    = {"car", "bus", "truck", "motorcycle", "bicycle", "person"}
 # Valid direction values
 KNOWN_DIRECTIONS = {"UP", "DOWN", "NONE", ""}
 
-# Valid event types
-KNOWN_EVENTS     = {"entry", "exit", "none", ""}
+# Valid crossed_line values (boolean string)
+KNOWN_EVENTS     = {"true", "false", ""}
 
 # Color palette for UI charts (hex colors)
 # Used by analysis_panel.py for bar charts and pie charts

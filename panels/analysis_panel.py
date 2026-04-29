@@ -185,9 +185,9 @@ class LogAnalysisPanel(QWidget):
         self.table.setAlternatingRowColors(True)
         
         # Define columns
-        cols = ["File", "Frame", "Timestamp", "Track", "Class",
-                "x1", "y1", "x2", "y2", "W", "H", "cx", "cy",
-                "Conf", "Direction", "Event"]
+        cols = ["File", "Frame", "Timestamp (s)", "Scene", "Group", "Track", "Class",
+                "Conf", "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2", "cx", "cy",
+                "W", "H", "Crossed", "Direction", "Speed (px/s)"]
         self.table.setColumnCount(len(cols))
         self.table.setHorizontalHeaderLabels(cols)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
@@ -469,28 +469,28 @@ class LogAnalysisPanel(QWidget):
                         return None, None, None
 
                     for row in reader:
-                        cls = row.get("class", "").strip()
+                        cls = row.get("class_name", "").strip()
                         if cls not in KNOWN_CLASSES or cls not in allowed:
                             continue
 
                         direction = row.get("direction", "").strip().upper()
                         if direction not in KNOWN_DIRECTIONS:
                             direction = "NONE"
-                        evt = row.get("event", "").strip().lower()
-                        if evt not in KNOWN_EVENTS:
-                            evt = "none"
+                        evt = row.get("crossed_line", "").strip().lower()
+                        if evt not in ("true", "false"):
+                            evt = "false"
 
                         cx   = safe_float(row.get("cx",   ""), 0, 640)
                         cy   = safe_float(row.get("cy",   ""), 0, 480)
                         conf = safe_float(row.get("confidence", ""), 0, 1)
 
                         clean_row = {k: sanitise_cell(v) for k, v in row.items()}
-                        clean_row.update(direction=direction, event=evt, **{"class": cls})
+                        clean_row.update(direction=direction, crossed_line=evt, class_name=cls)
                         all_rows.append(clean_row)
 
                         tid = row.get("track_id", "").strip()
                         key = (fpath, tid)
-                        frames_set.add((fpath, row.get("frame_id", "")))
+                        frames_set.add((fpath, row.get("frame", "")))
 
                         if key not in track_meta:
                             track_meta[key] = {
@@ -503,8 +503,9 @@ class LogAnalysisPanel(QWidget):
                             tm["confs"].append(conf)
                         if direction and direction != "NONE":
                             tm["dir_votes"][direction] += 1
-                        if evt == "entry":  tm["entries"] += 1
-                        elif evt == "exit": tm["exits"]   += 1
+                        if evt == "true":
+                            if direction == "DOWN": tm["entries"] += 1
+                            else:                   tm["exits"]   += 1
                         if cx > 0 or cy > 0:
                             tm["points"].append((cx, cy))
 
@@ -569,22 +570,22 @@ class LogAnalysisPanel(QWidget):
         """
         display_rows = all_rows[:MAX_TABLE_ROWS]
         self.table.setRowCount(len(display_rows))
-        col_keys = ["video", "frame_id", "timestamp", "track_id", "class",
-                    "x1", "y1", "x2", "y2", "width", "height", "cx", "cy",
-                    "confidence", "direction", "event"]
+        col_keys = ["video_name", "frame", "timestamp_sec", "scene_name", "group_id",
+                    "track_id", "class_name", "confidence",
+                    "bbox_x1", "bbox_y1", "bbox_x2", "bbox_y2", "cx", "cy",
+                    "frame_width", "frame_height", "crossed_line", "direction", "speed_px_s"]
         for ri, row in enumerate(display_rows):
             for ci, col in enumerate(col_keys):
                 val  = row.get(col, "")
                 item = QTableWidgetItem(str(val))
                 item.setTextAlignment(Qt.AlignCenter)
                 
-                # Color code events
-                evt = row.get("event", "").strip().lower()
-                if evt == "entry":  item.setForeground(QColor("#16a34a"))
-                elif evt == "exit": item.setForeground(QColor("#dc2626"))
+                # Color code crossed_line events
+                evt = row.get("crossed_line", "").strip().lower()
+                if evt == "true":   item.setForeground(QColor("#16a34a"))
                 
-                # Color code classes
-                if ci == 4:
+                # Color code classes (now at index 6)
+                if ci == 6:
                     item.setForeground(QColor(CLASS_PALETTE.get(val, "#374151")))
                 self.table.setItem(ri, ci, item)
 

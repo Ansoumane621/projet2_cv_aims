@@ -1,4 +1,20 @@
-/yolo_env
-/__pycache__
+# Environnement Python
+venv/
+yolo_env/
 
-yolov8n.pt
+# Fichiers temporaires
+*.log
+*.tmp
+
+# Modèles lourds
+*.pt
+*.pth
+
+# Vidéos / images (dataset)
+*.mp4
+*.avi
+dataset/
+
+# Cache Python
+__pycache__/
+*.pyc

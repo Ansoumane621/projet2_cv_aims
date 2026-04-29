@@ -9,6 +9,12 @@ Encapsulates all per-frame tracking logic:
   - OpenCV frame annotation
 
 No PyQt5 dependency — returns annotated NumPy frames.
+
+Updated to match the professor's CSV schema:
+  - timestamp_sec  : elapsed seconds since session start (not Unix time)
+  - speed_px_s     : estimated speed in pixels/second
+  - frame_width / frame_height passed to session
+  - dims (width, height) removed from write_row()
 """
 import time
 from typing import Optional
@@ -31,7 +37,7 @@ class TrackerEngine:
 
     Typical usage per frame
     -----------------------
-    annotated, fps = engine.process_frame(frame, line_y, allowed_classes)
+    annotated, fps, total = engine.process_frame(frame, line_y, allowed_classes, session)
     """
 
     FRAME_W = 640
@@ -47,6 +53,10 @@ class TrackerEngine:
         self.last_fps        = 0.0
         self.frame_id        = 0
 
+        # ── Session timing ────────────────────────────────────────────────
+        # Used to compute elapsed timestamp_sec (instead of Unix time)
+        self._session_start_time: float = 0.0
+
         # ── Per-track state ───────────────────────────────────────────────
         self.trajectories:       dict = {}   # track_id -> [(cx,cy), ...]
         self.track_classes:      dict = {}   # track_id -> class name
@@ -56,6 +66,10 @@ class TrackerEngine:
         self.pending_events:     dict = {}   # track_id -> [event, ...]
         self.prev_cy_map:        dict = {}   # track_id -> cy (previous frame)
         self.prev_bottom_map:    dict = {}   # track_id -> b  (previous frame)
+
+        # ── Speed estimation ──────────────────────────────────────────────
+        # Stores the last (cx, cy, timestamp_sec) per track for speed calc
+        self.prev_pos_time:      dict = {}   # track_id -> (cx, cy, t)
 
         # ── Counters ──────────────────────────────────────────────────────
         self.enter_count = 0
@@ -71,6 +85,7 @@ class TrackerEngine:
         self.last_detections = []
         self.last_fps        = 0.0
         self.frame_id        = 0
+        self._session_start_time = time.time()
         self.trajectories.clear()
         self.track_classes.clear()
         self.track_confidences.clear()
@@ -79,6 +94,7 @@ class TrackerEngine:
         self.pending_events.clear()
         self.prev_cy_map.clear()
         self.prev_bottom_map.clear()
+        self.prev_pos_time.clear()
         self.enter_count = 0
         self.exit_count  = 0
 
@@ -101,7 +117,9 @@ class TrackerEngine:
         self.frame_id += 1
         frame     = cv2.resize(frame, (self.FRAME_W, self.FRAME_H))
         annotated = frame.copy()
-        timestamp = round(time.time(), 4)
+
+        # Elapsed seconds since session start (matches timestamp_sec column)
+        timestamp_sec = round(time.time() - self._session_start_time, 3)
 
         # ── YOLO detection (every skip_frames) ───────────────────────────
         if self.frame_id % self.skip_frames == 0:
@@ -131,7 +149,7 @@ class TrackerEngine:
             if not t.is_confirmed():
                 continue
             total += self._process_track(
-                t, line_y, timestamp, annotated, session
+                t, line_y, timestamp_sec, annotated, session
             )
 
         # ── Stats overlay ─────────────────────────────────────────────────
@@ -165,11 +183,29 @@ class TrackerEngine:
             detections.append(([x1, y1, x2 - x1, y2 - y1], conf, name))
         return detections, fps_val
 
+    def _compute_speed(self, track_id: int, cx: int, cy: int,
+                       timestamp_sec: float) -> float:
+        """
+        Estimate speed in pixels/second using distance between
+        current and previous logged positions.
+
+        Returns 0.0 on the first appearance of a track.
+        """
+        speed = 0.0
+        if track_id in self.prev_pos_time:
+            prev_cx, prev_cy, prev_t = self.prev_pos_time[track_id]
+            dt = timestamp_sec - prev_t
+            if dt > 0:
+                dist  = np.hypot(cx - prev_cx, cy - prev_cy)
+                speed = round(dist / dt, 1)
+        self.prev_pos_time[track_id] = (cx, cy, timestamp_sec)
+        return speed
+
     def _process_track(
         self,
         t,
         line_y: int,
-        timestamp: float,
+        timestamp_sec: float,
         annotated: np.ndarray,
         session: Optional[SessionManager],
     ) -> int:
@@ -180,8 +216,6 @@ class TrackerEngine:
         top, b = max(0, top), min(self.FRAME_H - 1, b)
         cx    = (l + r)   // 2
         cy    = (top + b) // 2
-        w_box = r - l
-        h_box = b - top
 
         # ── Persist class / confidence ────────────────────────────────────
         if t.det_class is not None:
@@ -207,6 +241,7 @@ class TrackerEngine:
         prev_cy     = self.prev_cy_map.get(track_id, cy)
         prev_bottom = self.prev_bottom_map.get(track_id, b)
         direction   = self.track_directions.get(track_id, "NONE")
+        h_box       = b - top
         threshold   = max(2, h_box * 0.03)
 
         delta = cy - prev_cy
@@ -225,22 +260,45 @@ class TrackerEngine:
             track_id, direction, cy, b, prev_cy, prev_bottom, line_y, class_name
         )
 
+        # ── Speed estimation ──────────────────────────────────────────────
+        speed_px_s = 0.0
+        if self.frame_id % self.skip_frames == 0:
+            speed_px_s = self._compute_speed(track_id, cx, cy, timestamp_sec)
+
         # ── Log row ───────────────────────────────────────────────────────
-        if (session and self.frame_id % self.skip_frames == 0):
+        if session and self.frame_id % self.skip_frames == 0:
             pending = self.pending_events.pop(track_id, [])
             if event != "none":
                 pending = [e for e in pending if e != event]
 
             session.write_row(
-                self.frame_id, timestamp, track_id, class_name,
-                (l, top, r, b), (w_box, h_box), (cx, cy),
-                confidence, direction, event,
+                frame_id      = self.frame_id,
+                timestamp_sec = timestamp_sec,
+                track_id      = track_id,
+                class_name    = class_name,
+                bbox          = (l, top, r, b),
+                centre        = (cx, cy),
+                confidence    = confidence,
+                direction     = direction,
+                event         = event,
+                frame_width   = self.FRAME_W,
+                frame_height  = self.FRAME_H,
+                speed_px_s    = speed_px_s,
             )
             for extra_event in pending:
                 session.write_row(
-                    self.frame_id, timestamp, track_id, class_name,
-                    (l, top, r, b), (w_box, h_box), (cx, cy),
-                    confidence, direction, extra_event,
+                    frame_id      = self.frame_id,
+                    timestamp_sec = timestamp_sec,
+                    track_id      = track_id,
+                    class_name    = class_name,
+                    bbox          = (l, top, r, b),
+                    centre        = (cx, cy),
+                    confidence    = confidence,
+                    direction     = direction,
+                    event         = extra_event,
+                    frame_width   = self.FRAME_W,
+                    frame_height  = self.FRAME_H,
+                    speed_px_s    = speed_px_s,
                 )
 
         # ── Annotation ───────────────────────────────────────────────────
@@ -322,6 +380,7 @@ class TrackerEngine:
         purgeable = [
             self.trajectories, self.track_classes, self.track_confidences,
             self.track_directions, self.prev_cy_map, self.prev_bottom_map,
+            self.prev_pos_time,
         ]
         stale = set()
         for d in purgeable:

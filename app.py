@@ -171,7 +171,7 @@ class App(UI):
         self.set_live_counts(0, 0)
 
         # Open CSV log file for this session
-        err = self.session.open(self.video_path)
+        err = self.session.open(self.video_path, scene_name="unknown", group_id="group_01")
         if err:
             self._set_warning(f"Could not open log file: {err}")
             print(f"[START] ERROR opening log: {err}")
@@ -383,7 +383,6 @@ class App(UI):
         print(
             f"[DONE] IN={self.engine.enter_count} "
             f"OUT={self.engine.exit_count} "
-        )
             f"NET={self.engine.enter_count - self.engine.exit_count:+d} "
             f"OBJECTS={total_objects}"
         )
